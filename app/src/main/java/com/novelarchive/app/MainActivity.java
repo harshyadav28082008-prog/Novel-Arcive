@@ -31,6 +31,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import com.novelarchive.app.database.ArchiveSearchRepository;
+import com.novelarchive.app.database.ArchiveSearchRepository.SearchResult;
+
+import android.view.inputmethod.EditorInfo;
 
 public class MainActivity extends Activity {
 
@@ -40,7 +44,10 @@ public class MainActivity extends Activity {
     private final int primary = Color.rgb(240, 242, 250);
     private final int secondary = Color.rgb(160, 169, 190);
     private final int danger = Color.rgb(255, 135, 135);
-
+    
+    private ArchiveSearchRepository searchRepository;
+    private boolean showingSearchResults = false;
+     
     private FrameLayout root;
     private LinearLayout drawer;
     private View scrim;
@@ -63,6 +70,7 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(bg);
 
         repository = new UniverseRepository(this);
+        searchRepository = new ArchiveSearchRepository(this);
 
         buildHome();
     }
@@ -145,6 +153,25 @@ public class MainActivity extends Activity {
         scroll.addView(content);
 
         createDrawer();
+        searchInput.addTextChangedListener(new TextWatcher() {
+
+    @Override
+    public void beforeTextChanged(
+        CharSequence s, int start, int count, int after
+    ) {}
+
+    @Override
+    public void onTextChanged(
+        CharSequence s, int start, int before, int count
+    ) {
+        renderSearchResults(s.toString());
+    }
+
+    @Override
+    public void afterTextChanged(Editable s) {}
+});
+
+searchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         setContentView(root);
     }
 
@@ -846,57 +873,68 @@ public class MainActivity extends Activity {
 
     private void createDrawer() {
 
-        scrim = new View(this);
-        scrim.setBackgroundColor(0x99000000);
-        scrim.setVisibility(View.GONE);
+    scrim = new View(this);
+    scrim.setBackgroundColor(0x99000000);
+    scrim.setVisibility(View.GONE);
 
-        root.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
+    root.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
 
-        scrim.setOnClickListener(v -> closeDrawer());
+    scrim.setOnClickListener(v -> closeDrawer());
 
-        drawer = new LinearLayout(this);
-        drawer.setOrientation(LinearLayout.VERTICAL);
-        drawer.setPadding(dp(22), dp(42), dp(18), dp(24));
-        drawer.setBackgroundColor(card);
-        drawer.setVisibility(View.GONE);
+    drawer = new LinearLayout(this);
+    drawer.setOrientation(LinearLayout.VERTICAL);
+    drawer.setPadding(dp(22), dp(42), dp(18), dp(24));
+    drawer.setBackgroundColor(card);
+    drawer.setVisibility(View.GONE);
 
-        FrameLayout.LayoutParams drawerParams =
-            new FrameLayout.LayoutParams(dp(300), -1, Gravity.START);
+    FrameLayout.LayoutParams drawerParams =
+        new FrameLayout.LayoutParams(dp(300), -1, Gravity.START);
 
-        root.addView(drawer, drawerParams);
+    root.addView(drawer, drawerParams);
 
-        TextView title = new TextView(this);
-        title.setText("NOVEL ARCHIVE");
-        title.setTextColor(accent);
-        title.setTextSize(15);
-        title.setTypeface(null, Typeface.BOLD);
-        title.setLetterSpacing(0.14f);
+    TextView title = new TextView(this);
+    title.setText("NOVEL ARCHIVE");
+    title.setTextColor(accent);
+    title.setTextSize(15);
+    title.setTypeface(null, Typeface.BOLD);
+    title.setLetterSpacing(0.14f);
 
-        drawer.addView(title);
+    drawer.addView(title);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("YOUR WRITING WORKSPACE");
-        subtitle.setTextColor(secondary);
-        subtitle.setTextSize(10);
+    TextView subtitle = new TextView(this);
+    subtitle.setText("YOUR WRITING WORKSPACE");
+    subtitle.setTextColor(secondary);
+    subtitle.setTextSize(10);
 
-        LinearLayout.LayoutParams subParams =
-            new LinearLayout.LayoutParams(-1, -2);
+    LinearLayout.LayoutParams subParams =
+        new LinearLayout.LayoutParams(-1, -2);
 
-        subParams.setMargins(0, dp(9), 0, dp(30));
-        drawer.addView(subtitle, subParams);
+    subParams.setMargins(0, dp(9), 0, dp(30));
+    drawer.addView(subtitle, subParams);
 
-        addMenuItem(drawer, "Home", true);
+    addMenuItem(drawer, "Library", currentScreen.equals("HOME"));
+
+    if (currentScreen.equals("UNIVERSE")) {
+
         addDivider(drawer);
 
-        TextView libraryInfo = new TextView(this);
-        libraryInfo.setText("Universe and novel management");
-        libraryInfo.setTextColor(secondary);
-        libraryInfo.setTextSize(13);
-        libraryInfo.setPadding(dp(15), dp(12), dp(12), dp(12));
+        TextView current = new TextView(this);
+        current.setText("CURRENT UNIVERSE");
+        current.setTextColor(secondary);
+        current.setTextSize(11);
+        current.setPadding(dp(15), dp(16), dp(12), dp(8));
 
-        drawer.addView(libraryInfo);
+        drawer.addView(current);
+
+        Universe universe =
+            repository.getUniverseById(currentUniverseId);
+
+        if (universe != null) {
+            addMenuItem(drawer, universe.name, true);
+        }
     }
-
+}
+    
     private void addMenuItem(
         LinearLayout parent,
         String label,
@@ -970,30 +1008,40 @@ public class MainActivity extends Activity {
 
     private void toggleSearch() {
 
-        searchOpen = !searchOpen;
+    searchOpen = !searchOpen;
 
-        searchInput.setVisibility(
-            searchOpen ? View.VISIBLE : View.GONE
-        );
+    searchInput.setVisibility(
+        searchOpen ? View.VISIBLE : View.GONE
+    );
 
-        if (searchOpen) {
-            searchInput.requestFocus();
+    if (searchOpen) {
+
+        searchInput.requestFocus();
+        renderSearchResults(searchInput.getText().toString());
+
+    } else {
+
+        searchInput.setText("");
+        showingSearchResults = false;
+
+        if (currentScreen.equals("UNIVERSE")) {
+            refreshCurrentUniverse();
         } else {
-            searchInput.setText("");
+            buildHome();
+        }
 
-            InputMethodManager imm =
-                (InputMethodManager) getSystemService(
-                    Context.INPUT_METHOD_SERVICE
-                );
+        InputMethodManager imm =
+            (InputMethodManager) getSystemService(
+                Context.INPUT_METHOD_SERVICE
+            );
 
-            if (imm != null) {
-                imm.hideSoftInputFromWindow(
-                    searchInput.getWindowToken(),
-                    0
-                );
-            }
+        if (imm != null) {
+            imm.hideSoftInputFromWindow(
+                searchInput.getWindowToken(), 0
+            );
         }
     }
+}
 
     // ==================================================
     // UI HELPERS
@@ -1243,5 +1291,124 @@ public class MainActivity extends Activity {
         if (repository != null) {
             repository.close();
         }
+        if (searchRepository != null) {
+            searchRepository.close();
     }
+}
+
+private void renderSearchResults(String query) {
+
+    if (!searchOpen) return;
+
+    showingSearchResults = true;
+    content.removeAllViews();
+
+    TextView heading = new TextView(this);
+    heading.setText("SEARCH RESULTS");
+    heading.setTextColor(accent);
+    heading.setTextSize(12);
+    heading.setTypeface(null, Typeface.BOLD);
+    heading.setLetterSpacing(0.13f);
+
+    content.addView(heading);
+
+    if (query.trim().isEmpty()) {
+
+        addEmptyCard(content, "Start typing to search your archive.");
+
+        return;
+    }
+
+    List<SearchResult> results =
+        searchRepository.search(query);
+
+    if (results.isEmpty()) {
+
+        addEmptyCard(content, "No matching results found.");
+
+        return;
+    }
+
+    TextView count = new TextView(this);
+    count.setText(results.size() + " matching results");
+    count.setTextColor(secondary);
+    count.setTextSize(13);
+
+    LinearLayout.LayoutParams countParams =
+        new LinearLayout.LayoutParams(-1, -2);
+
+    countParams.topMargin = dp(9);
+    content.addView(count, countParams);
+
+    for (SearchResult result : results) {
+
+        LinearLayout box = createCard();
+
+        content.addView(box, sectionCardMargins());
+
+        TextView type = new TextView(this);
+        type.setText(
+            result.type.equals(ArchiveSearchRepository.TYPE_UNIVERSE)
+                ? "UNIVERSE"
+                : "NOVEL"
+        );
+        type.setTextColor(accent);
+        type.setTextSize(10);
+        type.setTypeface(null, Typeface.BOLD);
+        type.setLetterSpacing(0.12f);
+
+        box.addView(type);
+
+        TextView title = new TextView(this);
+        title.setText(result.title);
+        title.setTextColor(primary);
+        title.setTextSize(17);
+        title.setTypeface(null, Typeface.BOLD);
+
+        LinearLayout.LayoutParams titleParams =
+            new LinearLayout.LayoutParams(-1, -2);
+
+        titleParams.topMargin = dp(7);
+        box.addView(title, titleParams);
+
+        TextView parent = new TextView(this);
+        parent.setText(result.parentTitle);
+        parent.setTextColor(secondary);
+        parent.setTextSize(12);
+
+        LinearLayout.LayoutParams parentParams =
+            new LinearLayout.LayoutParams(-1, -2);
+
+        parentParams.topMargin = dp(5);
+        box.addView(parent, parentParams);
+
+        if (result.description != null
+            && !result.description.trim().isEmpty()) {
+
+            TextView description = new TextView(this);
+            description.setText(result.description);
+            description.setTextColor(secondary);
+            description.setTextSize(13);
+            description.setMaxLines(3);
+
+            LinearLayout.LayoutParams descParams =
+                new LinearLayout.LayoutParams(-1, -2);
+
+            descParams.topMargin = dp(8);
+            box.addView(description, descParams);
+        }
+
+        box.setOnClickListener(v -> {
+
+            if (result.type.equals(
+                ArchiveSearchRepository.TYPE_UNIVERSE
+            )) {
+                openUniverse(result.universeId);
+
+            } else {
+                openUniverse(result.universeId);
+            }
+        });
+    }
+}
 }
