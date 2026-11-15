@@ -3,6 +3,7 @@ package com.novelarchive.app.database;
 import android.content.Context;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
+import android.database.sqlite.SQLiteException;
 
 public class DatabaseHelper extends SQLiteOpenHelper {
 
@@ -430,5 +431,4 @@ private void migrateToVersion2(SQLiteDatabase db) {
         "ON chapter_event_connections(flowchart_id)"
     );
 }
-
 }
