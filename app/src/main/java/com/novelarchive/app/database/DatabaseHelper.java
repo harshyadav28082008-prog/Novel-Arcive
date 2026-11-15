@@ -1,9 +1,9 @@
+
 package com.novelarchive.app.database;
 
 import android.content.Context;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
-import android.database.sqlite.SQLiteException;
 
 public class DatabaseHelper extends SQLiteOpenHelper {
 
@@ -44,6 +44,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             "description TEXT," +
             "created_at INTEGER NOT NULL," +
             "updated_at INTEGER NOT NULL," +
+            "cover_image_path TEXT," +
             "FOREIGN KEY(universe_id) REFERENCES universes(id) " +
             "ON DELETE RESTRICT)"
         );
@@ -107,8 +108,8 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         );
 
         // 7. Character profiles
-        // UNIQUE(id, novel_id) allows other tables to enforce
-        // that related records belong to the same novel.
+        // UNIQUE(id, novel_id) allows related records to enforce
+        // that records belong to the same novel.
         db.execSQL(
             "CREATE TABLE characters (" +
             "id INTEGER PRIMARY KEY AUTOINCREMENT," +
@@ -250,7 +251,11 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             "REFERENCES characters(id, novel_id) ON DELETE CASCADE)"
         );
 
+        // Original database indexes
         createIndexes(db);
+
+        // Version 2 tables and indexes
+        createNovelStructureTables(db);
     }
 
     private void createIndexes(SQLiteDatabase db) {
@@ -301,134 +306,153 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         );
     }
 
-   @Override
-public void onUpgrade(
-    SQLiteDatabase db,
-    int oldVersion,
-    int newVersion
-) {
-    db.beginTransaction();
+    @Override
+    public void onUpgrade(
+        SQLiteDatabase db,
+        int oldVersion,
+        int newVersion
+    ) {
 
-    try {
-        if (oldVersion < 2) {
-            migrateToVersion2(db);
+        db.beginTransaction();
+
+        try {
+
+            if (oldVersion < 2) {
+                migrateToVersion2(db);
+            }
+
+            db.setTransactionSuccessful();
+
+        } finally {
+            db.endTransaction();
         }
-
-        db.setTransactionSuccessful();
-
-    } finally {
-        db.endTransaction();
     }
-}
 
-private void migrateToVersion2(SQLiteDatabase db) {
+    /**
+     * Upgrades an existing version 1 database to version 2.
+     */
+    private void migrateToVersion2(SQLiteDatabase db) {
 
-    // Novel cover image location.
-    db.execSQL(
-        "ALTER TABLE novels ADD COLUMN cover_image_path TEXT"
-    );
+        // Version 1 databases do not have this column.
+        db.execSQL(
+            "ALTER TABLE novels ADD COLUMN cover_image_path TEXT"
+        );
 
-    // 15. Volumes.
-    db.execSQL(
-        "CREATE TABLE volumes (" +
-        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-        "novel_id INTEGER NOT NULL," +
-        "title TEXT NOT NULL," +
-        "volume_number INTEGER NOT NULL," +
-        "description TEXT," +
-        "created_at INTEGER NOT NULL," +
-        "updated_at INTEGER NOT NULL," +
-        "UNIQUE(novel_id, volume_number)," +
-        "FOREIGN KEY(novel_id) REFERENCES novels(id) " +
-        "ON DELETE CASCADE)"
-    );
+        // Create the same v2 tables used by fresh installations.
+        createNovelStructureTables(db);
+    }
 
-    // 16. Chapters.
-    db.execSQL(
-        "CREATE TABLE chapters (" +
-        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-        "volume_id INTEGER NOT NULL," +
-        "title TEXT NOT NULL," +
-        "chapter_number INTEGER NOT NULL," +
-        "description TEXT," +
-        "created_at INTEGER NOT NULL," +
-        "updated_at INTEGER NOT NULL," +
-        "UNIQUE(volume_id, chapter_number)," +
-        "FOREIGN KEY(volume_id) REFERENCES volumes(id) " +
-        "ON DELETE CASCADE)"
-    );
+    /**
+     * Creates all version 2 novel-structure tables and indexes.
+     *
+     * Used by:
+     * - onCreate() for fresh installations.
+     * - migrateToVersion2() for existing version 1 installations.
+     */
+    private void createNovelStructureTables(SQLiteDatabase db) {
 
-    // 17. Independent chapter flowcharts.
-    db.execSQL(
-        "CREATE TABLE chapter_flowcharts (" +
-        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-        "chapter_id INTEGER NOT NULL," +
-        "title TEXT NOT NULL," +
-        "display_order INTEGER NOT NULL DEFAULT 0," +
-        "created_at INTEGER NOT NULL," +
-        "updated_at INTEGER NOT NULL," +
-        "FOREIGN KEY(chapter_id) REFERENCES chapters(id) " +
-        "ON DELETE CASCADE)"
-    );
+        // 15. Volumes
+        db.execSQL(
+            "CREATE TABLE volumes (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "novel_id INTEGER NOT NULL," +
+            "title TEXT NOT NULL," +
+            "volume_number INTEGER NOT NULL," +
+            "description TEXT," +
+            "created_at INTEGER NOT NULL," +
+            "updated_at INTEGER NOT NULL," +
+            "UNIQUE(novel_id, volume_number)," +
+            "FOREIGN KEY(novel_id) REFERENCES novels(id) " +
+            "ON DELETE CASCADE)"
+        );
 
-    // 18. Event nodes.
-    db.execSQL(
-        "CREATE TABLE chapter_events (" +
-        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-        "flowchart_id INTEGER NOT NULL," +
-        "title TEXT NOT NULL," +
-        "description TEXT," +
-        "position_x REAL NOT NULL DEFAULT 0," +
-        "position_y REAL NOT NULL DEFAULT 0," +
-        "display_order INTEGER NOT NULL DEFAULT 0," +
-        "created_at INTEGER NOT NULL," +
-        "updated_at INTEGER NOT NULL," +
-        "FOREIGN KEY(flowchart_id) REFERENCES chapter_flowcharts(id) " +
-        "ON DELETE CASCADE)"
-    );
+        // 16. Chapters
+        db.execSQL(
+            "CREATE TABLE chapters (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "volume_id INTEGER NOT NULL," +
+            "title TEXT NOT NULL," +
+            "chapter_number INTEGER NOT NULL," +
+            "description TEXT," +
+            "created_at INTEGER NOT NULL," +
+            "updated_at INTEGER NOT NULL," +
+            "UNIQUE(volume_id, chapter_number)," +
+            "FOREIGN KEY(volume_id) REFERENCES volumes(id) " +
+            "ON DELETE CASCADE)"
+        );
 
-    // 19. Connections between event nodes.
-    db.execSQL(
-        "CREATE TABLE chapter_event_connections (" +
-        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
-        "flowchart_id INTEGER NOT NULL," +
-        "from_event_id INTEGER NOT NULL," +
-        "to_event_id INTEGER NOT NULL," +
-        "label TEXT," +
-        "created_at INTEGER NOT NULL," +
-        "UNIQUE(flowchart_id, from_event_id, to_event_id)," +
-        "CHECK(from_event_id != to_event_id)," +
-        "FOREIGN KEY(flowchart_id) REFERENCES chapter_flowcharts(id) " +
-        "ON DELETE CASCADE," +
-        "FOREIGN KEY(from_event_id) REFERENCES chapter_events(id) " +
-        "ON DELETE CASCADE," +
-        "FOREIGN KEY(to_event_id) REFERENCES chapter_events(id) " +
-        "ON DELETE CASCADE)"
-    );
+        // 17. Independent chapter flowcharts
+        db.execSQL(
+            "CREATE TABLE chapter_flowcharts (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "chapter_id INTEGER NOT NULL," +
+            "title TEXT NOT NULL," +
+            "display_order INTEGER NOT NULL DEFAULT 0," +
+            "created_at INTEGER NOT NULL," +
+            "updated_at INTEGER NOT NULL," +
+            "FOREIGN KEY(chapter_id) REFERENCES chapters(id) " +
+            "ON DELETE CASCADE)"
+        );
 
-    db.execSQL(
-        "CREATE INDEX index_volumes_novel " +
-        "ON volumes(novel_id, volume_number)"
-    );
+        // 18. Event nodes
+        db.execSQL(
+            "CREATE TABLE chapter_events (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "flowchart_id INTEGER NOT NULL," +
+            "title TEXT NOT NULL," +
+            "description TEXT," +
+            "position_x REAL NOT NULL DEFAULT 0," +
+            "position_y REAL NOT NULL DEFAULT 0," +
+            "display_order INTEGER NOT NULL DEFAULT 0," +
+            "created_at INTEGER NOT NULL," +
+            "updated_at INTEGER NOT NULL," +
+            "FOREIGN KEY(flowchart_id) REFERENCES chapter_flowcharts(id) " +
+            "ON DELETE CASCADE)"
+        );
 
-    db.execSQL(
-        "CREATE INDEX index_chapters_volume " +
-        "ON chapters(volume_id, chapter_number)"
-    );
+        // 19. Directed connections between event nodes
+        db.execSQL(
+            "CREATE TABLE chapter_event_connections (" +
+            "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+            "flowchart_id INTEGER NOT NULL," +
+            "from_event_id INTEGER NOT NULL," +
+            "to_event_id INTEGER NOT NULL," +
+            "label TEXT," +
+            "created_at INTEGER NOT NULL," +
+            "UNIQUE(flowchart_id, from_event_id, to_event_id)," +
+            "CHECK(from_event_id != to_event_id)," +
+            "FOREIGN KEY(flowchart_id) REFERENCES chapter_flowcharts(id) " +
+            "ON DELETE CASCADE," +
+            "FOREIGN KEY(from_event_id) REFERENCES chapter_events(id) " +
+            "ON DELETE CASCADE," +
+            "FOREIGN KEY(to_event_id) REFERENCES chapter_events(id) " +
+            "ON DELETE CASCADE)"
+        );
 
-    db.execSQL(
-        "CREATE INDEX index_flowcharts_chapter " +
-        "ON chapter_flowcharts(chapter_id)"
-    );
+        // Version 2 indexes
+        db.execSQL(
+            "CREATE INDEX index_volumes_novel " +
+            "ON volumes(novel_id, volume_number)"
+        );
 
-    db.execSQL(
-        "CREATE INDEX index_chapter_events_flowchart " +
-        "ON chapter_events(flowchart_id)"
-    );
+        db.execSQL(
+            "CREATE INDEX index_chapters_volume " +
+            "ON chapters(volume_id, chapter_number)"
+        );
 
-    db.execSQL(
-        "CREATE INDEX index_event_connections_flowchart " +
-        "ON chapter_event_connections(flowchart_id)"
-    );
-}
+        db.execSQL(
+            "CREATE INDEX index_flowcharts_chapter " +
+            "ON chapter_flowcharts(chapter_id)"
+        );
+
+        db.execSQL(
+            "CREATE INDEX index_chapter_events_flowchart " +
+            "ON chapter_events(flowchart_id)"
+        );
+
+        db.execSQL(
+            "CREATE INDEX index_event_connections_flowchart " +
+            "ON chapter_event_connections(flowchart_id)"
+        );
+    }
 }

@@ -7,7 +7,9 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class NovelStructureRepository {
 
@@ -68,6 +70,174 @@ public class NovelStructureRepository {
         } finally {
             c.close();
         }
+    }
+
+    private List<Long> getOrderedIds(
+        String table,
+        String parentColumn,
+        String numberColumn,
+        long parentId
+    ) {
+        List<Long> ids = new ArrayList<>();
+
+        Cursor c = db.query(
+            table,
+            new String[]{"id"},
+            parentColumn + "=?",
+            new String[]{String.valueOf(parentId)},
+            null,
+            null,
+            numberColumn + " ASC, id ASC"
+        );
+
+        try {
+            while (c.moveToNext()) {
+                ids.add(c.getLong(0));
+            }
+        } finally {
+            c.close();
+        }
+
+        return ids;
+    }
+
+    /*
+     * Renumbers a complete list safely.
+     *
+     * First, every item receives a temporary positive number
+     * above the current maximum. Then the final numbers 1..N
+     * are assigned. This avoids collisions with UNIQUE constraints
+     * and does not require negative numbers.
+     *
+     * The caller must already be inside a transaction.
+     */
+    private void renumberItems(
+        String table,
+        String parentColumn,
+        String numberColumn,
+        long parentId,
+        List<Long> orderedIds
+    ) {
+        Cursor c = db.rawQuery(
+            "SELECT COALESCE(MAX(" + numberColumn + "), 0) " +
+            "FROM " + table + " WHERE " + parentColumn + "=?",
+            new String[]{String.valueOf(parentId)}
+        );
+
+        long maxNumber;
+
+        try {
+            c.moveToFirst();
+            maxNumber = c.getLong(0);
+        } finally {
+            c.close();
+        }
+
+        long offset = maxNumber + orderedIds.size() + 1000L;
+
+        if (offset <= maxNumber) {
+            throw new IllegalStateException(
+                "Could not calculate temporary ordering numbers."
+            );
+        }
+
+        for (int i = 0; i < orderedIds.size(); i++) {
+            ContentValues temporary = new ContentValues();
+            temporary.put(numberColumn, offset + i);
+
+            int changed = db.update(
+                table,
+                temporary,
+                "id=? AND " + parentColumn + "=?",
+                new String[]{
+                    String.valueOf(orderedIds.get(i)),
+                    String.valueOf(parentId)
+                }
+            );
+
+            if (changed != 1) {
+                throw new IllegalArgumentException(
+                    "An item no longer belongs to this section."
+                );
+            }
+        }
+
+        for (int i = 0; i < orderedIds.size(); i++) {
+            ContentValues finalValues = new ContentValues();
+            finalValues.put(numberColumn, i + 1);
+            finalValues.put("updated_at", now());
+
+            int changed = db.update(
+                table,
+                finalValues,
+                "id=? AND " + parentColumn + "=?",
+                new String[]{
+                    String.valueOf(orderedIds.get(i)),
+                    String.valueOf(parentId)
+                }
+            );
+
+            if (changed != 1) {
+                throw new IllegalArgumentException(
+                    "Could not finish reordering the items."
+                );
+            }
+        }
+    }
+
+    private void validateCompleteOrder(
+        String table,
+        String parentColumn,
+        long parentId,
+        List<Long> orderedIds
+    ) {
+        if (orderedIds == null) {
+            throw new IllegalArgumentException("Order list cannot be null.");
+        }
+
+        List<Long> existingIds = getOrderedIds(
+            table,
+            parentColumn,
+            "id",
+            parentId
+        );
+
+        if (existingIds.size() != orderedIds.size()) {
+            throw new IllegalArgumentException(
+                "The order list must contain every item in this section."
+            );
+        }
+
+        Set<Long> expected = new HashSet<>(existingIds);
+        Set<Long> supplied = new HashSet<>(orderedIds);
+
+        if (supplied.size() != orderedIds.size()
+            || !expected.equals(supplied)) {
+            throw new IllegalArgumentException(
+                "The order list contains missing, duplicate, or invalid IDs."
+            );
+        }
+    }
+
+    private void moveIdToPosition(
+        List<Long> ids,
+        long itemId,
+        int requestedNumber
+    ) {
+        int oldIndex = ids.indexOf(itemId);
+
+        if (oldIndex < 0) {
+            throw new IllegalArgumentException("Item not found.");
+        }
+
+        ids.remove(oldIndex);
+
+        int newIndex = Math.max(
+            0,
+            Math.min(requestedNumber - 1, ids.size())
+        );
+
+        ids.add(newIndex, itemId);
     }
 
     // ---------------------------------------------------------
@@ -205,26 +375,94 @@ public class NovelStructureRepository {
             throw new IllegalArgumentException("Invalid volume number.");
         }
 
-        ContentValues values = new ContentValues();
-        values.put("title", title.trim());
-        values.put("volume_number", number);
-        values.put("description", description);
-        values.put("updated_at", now());
+        db.beginTransaction();
 
-        int count = db.update(
-            "volumes",
-            values,
-            "id=?",
-            new String[]{String.valueOf(volumeId)}
-        );
+        try {
+            Cursor c = db.rawQuery(
+                "SELECT novel_id FROM volumes WHERE id=?",
+                new String[]{String.valueOf(volumeId)}
+            );
 
-        if (count == 0) {
-            throw new IllegalArgumentException("Volume not found.");
+            long novelId;
+
+            try {
+                if (!c.moveToFirst()) {
+                    throw new IllegalArgumentException("Volume not found.");
+                }
+                novelId = c.getLong(0);
+            } finally {
+                c.close();
+            }
+
+            List<Long> ids = getOrderedIds(
+                "volumes",
+                "novel_id",
+                "volume_number",
+                novelId
+            );
+
+            moveIdToPosition(ids, volumeId, number);
+
+            ContentValues values = new ContentValues();
+            values.put("title", title.trim());
+            values.put("description", description);
+            values.put("updated_at", now());
+
+            db.update(
+                "volumes",
+                values,
+                "id=?",
+                new String[]{String.valueOf(volumeId)}
+            );
+
+            renumberItems(
+                "volumes",
+                "novel_id",
+                "volume_number",
+                novelId,
+                ids
+            );
+
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    public void reorderVolumes(long novelId, List<Long> orderedVolumeIds) {
+        requireId(novelId);
+
+        if (!exists("novels", novelId)) {
+            throw new IllegalArgumentException("Novel not found.");
+        }
+
+        db.beginTransaction();
+
+        try {
+            validateCompleteOrder(
+                "volumes",
+                "novel_id",
+                novelId,
+                orderedVolumeIds
+            );
+
+            renumberItems(
+                "volumes",
+                "novel_id",
+                "volume_number",
+                novelId,
+                orderedVolumeIds
+            );
+
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
         }
     }
 
     public void deleteVolume(long volumeId) {
         requireId(volumeId);
+
         db.delete(
             "volumes",
             "id=?",
@@ -313,26 +551,94 @@ public class NovelStructureRepository {
             throw new IllegalArgumentException("Invalid chapter number.");
         }
 
-        ContentValues values = new ContentValues();
-        values.put("title", title.trim());
-        values.put("chapter_number", number);
-        values.put("description", description);
-        values.put("updated_at", now());
+        db.beginTransaction();
 
-        int count = db.update(
-            "chapters",
-            values,
-            "id=?",
-            new String[]{String.valueOf(chapterId)}
-        );
+        try {
+            Cursor c = db.rawQuery(
+                "SELECT volume_id FROM chapters WHERE id=?",
+                new String[]{String.valueOf(chapterId)}
+            );
 
-        if (count == 0) {
-            throw new IllegalArgumentException("Chapter not found.");
+            long volumeId;
+
+            try {
+                if (!c.moveToFirst()) {
+                    throw new IllegalArgumentException("Chapter not found.");
+                }
+                volumeId = c.getLong(0);
+            } finally {
+                c.close();
+            }
+
+            List<Long> ids = getOrderedIds(
+                "chapters",
+                "volume_id",
+                "chapter_number",
+                volumeId
+            );
+
+            moveIdToPosition(ids, chapterId, number);
+
+            ContentValues values = new ContentValues();
+            values.put("title", title.trim());
+            values.put("description", description);
+            values.put("updated_at", now());
+
+            db.update(
+                "chapters",
+                values,
+                "id=?",
+                new String[]{String.valueOf(chapterId)}
+            );
+
+            renumberItems(
+                "chapters",
+                "volume_id",
+                "chapter_number",
+                volumeId,
+                ids
+            );
+
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    public void reorderChapters(long volumeId, List<Long> orderedChapterIds) {
+        requireId(volumeId);
+
+        if (!exists("volumes", volumeId)) {
+            throw new IllegalArgumentException("Volume not found.");
+        }
+
+        db.beginTransaction();
+
+        try {
+            validateCompleteOrder(
+                "chapters",
+                "volume_id",
+                volumeId,
+                orderedChapterIds
+            );
+
+            renumberItems(
+                "chapters",
+                "volume_id",
+                "chapter_number",
+                volumeId,
+                orderedChapterIds
+            );
+
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
         }
     }
 
     public void deleteChapter(long chapterId) {
         requireId(chapterId);
+
         db.delete(
             "chapters",
             "id=?",
@@ -415,6 +721,7 @@ public class NovelStructureRepository {
 
     public void deleteFlowchart(long flowchartId) {
         requireId(flowchartId);
+
         db.delete(
             "chapter_flowcharts",
             "id=?",
@@ -534,6 +841,7 @@ public class NovelStructureRepository {
 
     public void deleteEvent(long eventId) {
         requireId(eventId);
+
         db.delete(
             "chapter_events",
             "id=?",
@@ -648,6 +956,7 @@ public class NovelStructureRepository {
 
     public void deleteConnection(long connectionId) {
         requireId(connectionId);
+
         db.delete(
             "chapter_event_connections",
             "id=?",
@@ -700,8 +1009,6 @@ public class NovelStructureRepository {
                 );
             }
 
-            // Copy source connections into the destination.
-            // INSERT OR IGNORE handles connections that already exist.
             db.execSQL(
                 "INSERT OR IGNORE INTO chapter_event_connections " +
                 "(flowchart_id, from_event_id, to_event_id, label, created_at) " +
@@ -713,14 +1020,12 @@ public class NovelStructureRepository {
                 }
             );
 
-            // Remove old source connections.
             db.delete(
                 "chapter_event_connections",
                 "flowchart_id=?",
                 new String[]{String.valueOf(sourceFlowchartId)}
             );
 
-            // Move source nodes without changing their IDs or positions.
             ContentValues values = new ContentValues();
             values.put("flowchart_id", destinationFlowchartId);
 
@@ -731,7 +1036,6 @@ public class NovelStructureRepository {
                 new String[]{String.valueOf(sourceFlowchartId)}
             );
 
-            // Remove the now-empty source flowchart.
             db.delete(
                 "chapter_flowcharts",
                 "id=?",

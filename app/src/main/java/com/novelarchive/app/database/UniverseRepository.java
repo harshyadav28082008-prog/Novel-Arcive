@@ -49,6 +49,7 @@ public class UniverseRepository {
         public final long universeId;
         public final String title;
         public final String description;
+        public final String coverImagePath;
         public final long createdAt;
         public final long updatedAt;
 
@@ -57,6 +58,7 @@ public class UniverseRepository {
             long universeId,
             String title,
             String description,
+            String coverImagePath,
             long createdAt,
             long updatedAt
         ) {
@@ -64,6 +66,7 @@ public class UniverseRepository {
             this.universeId = universeId;
             this.title = title;
             this.description = description;
+            this.coverImagePath = coverImagePath;
             this.createdAt = createdAt;
             this.updatedAt = updatedAt;
         }
@@ -234,6 +237,7 @@ public class UniverseRepository {
                 "universe_id",
                 "title",
                 "description",
+                "cover_image_path",
                 "created_at",
                 "updated_at"
             },
@@ -265,6 +269,7 @@ public class UniverseRepository {
                 "universe_id",
                 "title",
                 "description",
+                "cover_image_path",
                 "created_at",
                 "updated_at"
             },
@@ -340,8 +345,9 @@ public class UniverseRepository {
             cursor.getLong(1),
             cursor.getString(2),
             cursor.getString(3),
-            cursor.getLong(4),
-            cursor.getLong(5)
+            cursor.getString(4),
+            cursor.getLong(5),
+            cursor.getLong(6)
         );
     }
 
